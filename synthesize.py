@@ -160,7 +160,6 @@ def check_overlap():
     """
     pass
 
-def place_seeds(background, image, seeds, max_overlap, border):
 def place_seeds(background, image, mask, max_overlap, border):
     """ 
     Place seeds on the background with random position and rotation. 
