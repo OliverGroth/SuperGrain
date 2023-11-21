@@ -141,6 +141,11 @@ def create_mask(image, seeds):
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
     dilated_mask = cv2.dilate(mask, kernel, iterations=1)
     
+    # Erode the mask a bit
+    kernel_size = 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    mask = cv2.erode(mask, kernel, iterations=1)
+
     return mask, dilated_mask
 
 
@@ -213,6 +218,7 @@ def place_seeds(background, image, mask, max_overlap, border):
                 break
 
     return background, mask
+
 
 def main():
     filepath = "private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG"
