@@ -231,9 +231,9 @@ def place_seeds(background, image, mask, max_overlap, border):
     return background, mask
 
 def main():
-    file = "$$IMG_9291.tbin"
-    image = Image.open("IMG_9291.JPG")
-    image = cv2.imread("IMG_9291.JPG")
+    file = "private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/$$IMG_9291.tbin"#"$$IMG_9291.tbin"
+    image = Image.open("private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG")#Image.open("IMG_9291.JPG")
+    image = cv2.imread("private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG")#cv2.imread("IMG_9291.JPG")
 
     seeds = segment_seeds(file, image)
     mask, dilated_mask = create_mask(image, seeds)
