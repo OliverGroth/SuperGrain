@@ -8,6 +8,8 @@ import hashlib
 import struct
 from PIL import Image
 import random
+import math
+import matplotlib.image as mpimg
 
 def read_seed(start_byte,out_hex):
     """
@@ -175,77 +177,133 @@ def check_overlap():
     """
     pass
 
+def generate_unique_color():
+    """Generate a unique color in RGB format."""
+    return random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)
+
+import cv2
+import numpy as np
+import random
+
 def place_seeds(background, image, mask, max_overlap, border):
     """ 
     Place seeds on the background with random position and rotation. 
+
+    Also create a mask image for the seeds where the seeds are marked with unique colours and have a one-pixel black border.
     """
+
     h, w = background.shape[:2]
+    mask_image = np.zeros((h, w, 3), dtype=np.uint8)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     seeds = []
     for contour in contours:
         # Create a mask for the current contour
-        contour_mask = np.zeros_like(mask)
-        cv2.drawContours(contour_mask, [contour], -1, (255), thickness=cv2.FILLED)
+        x, y, w, h = cv2.boundingRect(contour)
+        contour_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(contour_mask, [contour - [x, y]], -1, 255, thickness=cv2.FILLED)
 
         # Apply the mask to extract the seed
-        seed = cv2.bitwise_and(image, image, mask=contour_mask)
+        seed = image[y:y+h, x:x+w]
+        seed = cv2.bitwise_and(seed, seed, mask=contour_mask)
         seeds.append((seed, contour_mask))
 
     for seed in seeds:
-        
         seed_image, mask = seed
 
-        # Find the center of the seed for rotation
-        M = cv2.moments(mask)
-        if M["m00"] != 0:
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
-        else:
-            cX, cY = mask.shape[1] // 2, mask.shape[0] // 2
+        # Calculate new dimensions for the canvas
+        diagonal = int(math.sqrt(mask.shape[0]**2 + mask.shape[1]**2))
+        new_canvas_size = (diagonal, diagonal)
+
+        # Create a larger canvas and place the seed in the center
+        large_canvas_seed = np.zeros((diagonal, diagonal, 3), dtype=np.uint8)
+        large_canvas_mask = np.zeros((diagonal, diagonal), dtype=np.uint8)
+
+        offset_x = (diagonal - mask.shape[1]) // 2
+        offset_y = (diagonal - mask.shape[0]) // 2
+
+        large_canvas_seed[offset_y:offset_y+mask.shape[0], offset_x:offset_x+mask.shape[1]] = seed_image
+        large_canvas_mask[offset_y:offset_y+mask.shape[0], offset_x:offset_x+mask.shape[1]] = mask
+
+        # Find the center of the large canvas for rotation
+        center = (diagonal // 2, diagonal // 2)
 
         # Random rotation
         angle = random.randint(0, 360)
-        rotation_matrix = cv2.getRotationMatrix2D((cX, cY), angle, 1)
-        rotated_seed = cv2.warpAffine(seed_image, rotation_matrix, (mask.shape[1], mask.shape[0]))
-        rotated_mask = cv2.warpAffine(mask, rotation_matrix, (mask.shape[1], mask.shape[0]))
+        rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1)
+        rotated_seed = cv2.warpAffine(large_canvas_seed, rotation_matrix, new_canvas_size)
+        rotated_mask = cv2.warpAffine(large_canvas_mask, rotation_matrix, new_canvas_size)
 
 
         # Random position
-        max_x, max_y = background.shape[1] - mask.shape[1], background.shape[0] - mask.shape[0]
-        rand_x, rand_y = random.randint(0, max_x), random.randint(0, max_y)
-
-        print(rand_x, rand_y)
+        max_x, max_y = background.shape[1] - rotated_seed.shape[1] - border, background.shape[0] - rotated_seed.shape[0] - border
+        max_x, max_y = max(max_x, 0), max(max_y, 0)
+        rand_x, rand_y = random.randint(border, max_x), random.randint(border, max_y)
 
         # Create a region to place the seed
-        background_region = background[rand_y:rand_y+mask.shape[0], rand_x:rand_x+mask.shape[1]]
-        
+        background_region = background[rand_y:rand_y+rotated_seed.shape[0], rand_x:rand_x+rotated_seed.shape[1]]
 
+        # Create a blurred version of the seed
+        blurred_seed = cv2.GaussianBlur(seed_image, (5, 5), 0)
+
+        # Create an edge mask
+        kernel = np.ones((5, 5), np.uint8)
+        dilated_mask = cv2.dilate(mask, kernel, iterations=1)
+        edge_mask = dilated_mask - mask
+
+        # Blend the blurred and original seed along the edges
+        edge_mask_3d = np.repeat(edge_mask[:, :, np.newaxis], 3, axis=2)  # Making the edge mask 3-channel
+        blended_seed = np.where(edge_mask_3d, blurred_seed, seed_image)
 
         # Place the rotated seed on the background
         seed_placed = cv2.bitwise_and(background_region, background_region, mask=cv2.bitwise_not(rotated_mask))
         seed_placed = cv2.add(seed_placed, cv2.bitwise_and(rotated_seed, rotated_seed, mask=rotated_mask))
-        background[rand_y:rand_y+mask.shape[0], rand_x:rand_x+mask.shape[1]] = seed_placed
+        background[rand_y:rand_y+rotated_seed.shape[0], rand_x:rand_x+rotated_seed.shape[1]] = seed_placed
 
-    return background, mask
+        # Unique color for each seed in the mask image
+        unique_color = generate_unique_color()
+
+        # Add a one-pixel black border around the mask
+        kernel = np.ones((3, 3), np.uint8)
+        border_mask = cv2.dilate(rotated_mask, kernel, iterations=1) - rotated_mask
+
+        # Apply the border and color mask within the correct region
+        mask_image_region = mask_image[rand_y:rand_y+rotated_seed.shape[0], rand_x:rand_x+rotated_seed.shape[1]]
+
+        # Apply border
+        border_mask_region = border_mask > 0
+        mask_image_region[border_mask_region] = (0, 0, 0)
+
+        # Apply unique color, ensuring to exclude the border area
+        unique_color_mask_region = (rotated_mask > 0) & ~border_mask_region
+        mask_image_region[unique_color_mask_region] = unique_color
+
+        # Update the region in the original mask image
+        mask_image[rand_y:rand_y+rotated_seed.shape[0], rand_x:rand_x+rotated_seed.shape[1]] = mask_image_region
+
+    return background, mask_image
+
 
 def main():
-    file = "private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/$$IMG_9291.tbin"#"$$IMG_9291.tbin"
-    image = Image.open("private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG")#Image.open("IMG_9291.JPG")
-    image = cv2.imread("private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG")#cv2.imread("IMG_9291.JPG")
+    file = "/Users/buyn/Desktop/project_w_oliver/private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/$$IMG_9291.tbin"
+    image = Image.open("private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG")
+    image = cv2.imread("private_data/croptailor/oat_images/5 analyzed lines in duplicate/22-0078/IMG_9291.JPG")
 
     seeds = segment_seeds(file, image)
     mask, dilated_mask = create_mask(image, seeds)
     #background = extract_background(image, dilated_mask)
     background = cv2.imread("background.jpg")
     
-    new_image, mask = place_seeds(background, image, mask, max_overlap=0.1, border=100)
-    
+    # Loop to create and save 20 pairs of new_image and mask
+    for i in range(20):
+        background_copy = np.copy(background)
+        image_copy = np.copy(image)
+        mask_copy = np.copy(mask)
+        new_image, mask_image = place_seeds(background_copy, image_copy, mask_copy, max_overlap=0.1, border=500)
+        mpimg.imsave(f"/Users/buyn/Desktop/project_w_oliver/private_data/our_data/image/img_{i}.png", new_image)
+        mpimg.imsave(f"/Users/buyn/Desktop/project_w_oliver/private_data/our_data/mask/mask_{i}.png", mask_image)
 
-    plt.figure()
-    plt.imshow(new_image)
-    plt.show()
 
     # Save new_image
     cv2.imwrite("new_image.jpg", new_image)
